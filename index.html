@@ -31,6 +31,10 @@
       <button class="icon-btn" id="btn-redo" aria-label="やり直す" title="やり直す">
         <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
       </button>
+      <button class="icon-btn run" id="btn-run" aria-label="実行" title="実行（テスト画面）">
+        <svg class="icon-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></svg>
+        <svg class="icon-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></svg>
+      </button>
       <button class="icon-btn" id="btn-search" aria-label="検索と置換" title="検索と置換">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       </button>
@@ -66,14 +70,31 @@
     </section>
 
     <!-- エディタ本体 -->
-    <main class="editor-wrap">
+    <main class="editor-wrap" id="editor-wrap">
+      <div class="layer search-layer" id="search-layer" aria-hidden="true"></div>
+      <div class="layer code-layer" id="code-layer" aria-hidden="true"></div>
       <textarea id="editor"
         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
         aria-label="テキストエディタ" placeholder="ここに入力…"></textarea>
     </main>
 
+    <!-- 実行・テスト画面 -->
+    <section class="runview" id="runview" hidden>
+      <div class="run-head">
+        <select id="run-lang" aria-label="言語"></select>
+        <button class="text-btn" id="copy-code" title="提出用にコードをコピー">コピー</button>
+        <button class="text-btn primary" id="run-all">▶ 全て実行</button>
+        <button class="text-btn stop" id="run-stop" hidden>■ 停止</button>
+      </div>
+      <div class="run-status" id="run-status" hidden></div>
+      <div class="run-summary" id="run-summary"></div>
+      <div class="cases" id="cases"></div>
+      <button class="text-btn add-case" id="add-case">＋ テストケースを追加</button>
+      <p class="run-note" id="run-note"></p>
+    </section>
+
     <!-- 補助キーバー -->
-    <footer class="bottom">
+    <footer class="bottom" id="bottom">
       <div class="keybar" id="keybar" role="toolbar" aria-label="補助キー"></div>
       <div class="statusbar">
         <span id="status-pos">1:1</span>
@@ -132,6 +153,8 @@
         </select>
       </label>
       <label class="field check"><input type="checkbox" id="set-wrap"> 折り返し表示</label>
+      <label class="field check"><input type="checkbox" id="set-highlight"> コードを色分け表示</label>
+      <label class="field check"><input type="checkbox" id="set-linenumbers"> 行番号（コード表示時）</label>
       <label class="field check"><input type="checkbox" id="set-mono"> 等幅フォント</label>
       <label class="field check"><input type="checkbox" id="set-autoindent"> 改行時に自動インデント</label>
       <label class="field check"><input type="checkbox" id="set-pairs"> 補助キーで括弧を自動で閉じる</label>
@@ -141,9 +164,28 @@
     </form>
   </dialog>
 
+  <!-- 新規ファイル（テンプレート選択） -->
+  <dialog id="newfile">
+    <form method="dialog">
+      <h2>新規ファイル</h2>
+      <div class="template-list">
+        <button value="atcoder-py"><b>AtCoder</b><span>Python</span></button>
+        <button value="atcoder-cpp"><b>AtCoder</b><span>C++（実行はオンライン）</span></button>
+        <button value="euler-py"><b>Project Euler</b><span>Python</span></button>
+        <button value="js"><b>JavaScript</b><span>Node.js 風の入出力</span></button>
+        <button value="text"><b>テキスト</b><span>メモなど</span></button>
+      </div>
+      <div class="dialog-actions">
+        <button class="text-btn" value="">キャンセル</button>
+      </div>
+    </form>
+  </dialog>
+
   <input type="file" id="file-input" hidden>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <script src="syntax.js"></script>
+  <script src="runner.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

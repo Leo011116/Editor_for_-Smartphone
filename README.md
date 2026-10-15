@@ -1,8 +1,24 @@
 # Pocket Editor
 
-スマホで快適に使えるテキストエディタ（PWA）。ビルド不要の素の HTML / CSS / JavaScript だけで動きます。
+スマホで AtCoder や Project Euler をするためのコードエディタ（PWA）。
+ビルド不要の素の HTML / CSS / JavaScript だけで動きます。
 
-## 主な機能
+## 競技プログラミング向けの機能
+
+- **その場で実行**：上部の ▶ で実行・テスト画面へ
+  - **Python**：ブラウザ内で実行（[Pyodide](https://pyodide.org/)）。初回に約 10MB をダウンロードした後はオフラインでも動作。
+    `numpy` などは import すると自動で読み込み。`sys.stdin.buffer` や `exit()` も使用可、巨大整数の `str()` 制限は解除済み
+  - **JavaScript**：ブラウザ内で実行。`require('fs').readFileSync('/dev/stdin')` と `readline` の `line`/`close` に対応
+  - **C++**：[Wandbox](https://wandbox.org/) API でコンパイル・実行（要ネット接続、`-O2 -std=gnu++20`、ACL は非対応）
+- **テストケース**：入力と期待する出力を登録して一括実行し、**AC / WA / RE / CE** を判定（小数は誤差 1e-6 まで許容）。
+  ファイルごとに保存され、「貼り付け」ボタンでサンプルを入れられる
+- **実行時間の表示**と**停止ボタン**（無限ループや長い Project Euler の計算を中断できる）
+- **エラー行へジャンプ**：エラーメッセージの行番号をタップするとその行へ移動
+- **テンプレート**：AtCoder（Python / C++）、Project Euler（Python）、JavaScript
+- **シンタックスハイライト**と**行番号**、Python の `:` 後の自動インデント
+- 提出用の**コードコピー**ボタン
+
+## エディタの機能
 
 - **自動保存**：入力内容は端末内（IndexedDB）に自動で保存
 - **複数ファイル管理**：☰ から一覧・切り替え・新規作成、ファイル名タップで名前変更
@@ -39,7 +55,10 @@ python3 -m http.server 8000
 | --- | --- |
 | `index.html` | 画面構成 |
 | `style.css` | スタイル（ライト／ダーク対応） |
-| `app.js` | エディタ本体の処理 |
+| `app.js` | エディタ本体・実行画面の処理 |
+| `syntax.js` | シンタックスハイライト |
+| `runner.js` | コード実行（Python / JavaScript / C++）と出力の判定 |
+| `workers/` | Python（Pyodide）・JavaScript を動かす Web Worker |
 | `sw.js` | オフライン用 Service Worker（アプリ更新時は `VERSION` を上げる） |
 | `manifest.webmanifest` | PWA 設定 |
 | `icons/` | アプリアイコン |

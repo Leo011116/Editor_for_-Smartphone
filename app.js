@@ -19,6 +19,8 @@
     mono: true,
     autoIndent: true,
     pairs: true,
+    highlight: true,
+    lineNumbers: true,
   };
 
   function lsGet(key) {
@@ -43,7 +45,7 @@
     const dark = settings.theme === 'dark' ||
       (settings.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
     $('meta[name="theme-color"]').setAttribute('content', dark ? '#26282e' : '#f4f5f7');
-    if (search.open) renderHighlights();
+    refreshLayers();
   }
 
   const indentUnit = () => (settings.indent === 'tab' ? '\t' : ' '.repeat(Number(settings.indent)));
@@ -115,9 +117,10 @@
     }
   }
 
-  async function createFile(name = 'untitled.txt', content = '') {
+  async function createFile(name = 'untitled.txt', content = '', tests) {
     const now = Date.now();
     const file = { id: newId(), name: uniqueName(name), content, created: now, updated: now };
+    if (tests) file.tests = tests;
     files.push(file);
     await store.put(file);
     openFile(file);
@@ -135,7 +138,9 @@
     lsSet(LAST_FILE_KEY, file.id);
     setDirty(false);
     updateStatus();
+    renderCode();
     if (search.open) refreshSearch();
+    if (runUI.open) renderRunView();
   }
 
   function setDirty(on) { $('#save-state').classList.toggle('on', on); }
@@ -180,8 +185,11 @@
     const trimmed = name.trim();
     if (!trimmed || trimmed === current.name) return;
     current.name = uniqueName(trimmed);
+    delete current.lang;
     $('#filename').textContent = current.name;
     document.title = `${current.name} — Pocket Editor`;
+    renderCode();
+    if (runUI.open) renderRunView();
     flushSave();
     store.put(current);
   }
@@ -459,7 +467,7 @@
     const before = v.slice(lineBounds(s, v).start, s);
     const indent = before.match(/^[ \t]*/)[0];
     const last = before.trimEnd().slice(-1);
-    const opens = last && '{[('.includes(last);
+    const opens = !!last && ('{[('.includes(last) || (last === ':' && effectiveLang() === 'python'));
     if (!indent && !opens) return;
 
     e.preventDefault();
@@ -496,6 +504,9 @@
     } else if (mod && e.key.toLowerCase() === 'd') {
       e.preventDefault();
       duplicateLine();
+    } else if (mod && e.key === 'Enter') {
+      e.preventDefault();
+      openRunView(true);
     }
   });
 
@@ -521,6 +532,7 @@
   };
 
   ed.addEventListener('input', () => {
+    renderCode();
     scheduleSave();
     queueStatus();
     if (search.open) queueSearchRefresh();
@@ -534,10 +546,6 @@
   // 検索・置換
   // ===================================================================
   const search = { open: false, matches: [], index: -1 };
-  const highlight = document.createElement('div');
-  highlight.className = 'highlight';
-  highlight.setAttribute('aria-hidden', 'true');
-  ed.before(highlight);
 
   function buildRegex() {
     const q = $('#find-input').value;
@@ -605,8 +613,7 @@
 
   function renderHighlights() {
     const active = search.open && search.matches.length > 0;
-    ed.classList.toggle('searching', active);
-    if (!active) { highlight.innerHTML = ''; return; }
+    if (!active) { searchLayer.innerHTML = ''; return; }
     const v = ed.value;
     const cur = isCurrentSelected() ? search.index : -1;
     let html = '';
@@ -617,19 +624,12 @@
       last = m.end;
     });
     html += escapeHtml(v.slice(last)) + ' ';
-    highlight.innerHTML = html;
-    highlight.classList.toggle('nowrap', !settings.wrap);
-    highlight.classList.toggle('proportional', !settings.mono);
-    highlight.style.width = ed.clientWidth + 'px';
-    highlight.style.tabSize = ed.style.tabSize;
-    syncHighlightScroll();
+    searchLayer.innerHTML = html;
+    updateLayerStyles();
+    syncLayerScroll();
   }
 
-  function syncHighlightScroll() {
-    highlight.scrollTop = ed.scrollTop;
-    highlight.scrollLeft = ed.scrollLeft;
-  }
-  ed.addEventListener('scroll', () => { if (search.open) syncHighlightScroll(); }, { passive: true });
+  ed.addEventListener('scroll', () => syncLayerScroll(), { passive: true });
 
   function gotoMatch(dir) {
     if (!search.matches.length) refreshSearch();
@@ -712,11 +712,80 @@
     refreshSearch();
   }
 
-  function closeSearch() {
+  function closeSearch(focusEditor = true) {
     search.open = false;
     $('#searchbar').hidden = true;
     renderHighlights();
-    ed.focus({ preventScroll: true });
+    if (focusEditor) ed.focus({ preventScroll: true });
+  }
+
+  // ===================================================================
+  // 背面レイヤー（色分け・行番号・検索ハイライト）
+  // ===================================================================
+  const searchLayer = $('#search-layer');
+  const codeLayer = $('#code-layer');
+  const editorWrap = $('#editor-wrap');
+  let gutterDigits = -1;
+
+  function effectiveLang() {
+    return current ? (current.lang || Runner.langFromName(current.name)) : 'text';
+  }
+
+  function codeModeOn() {
+    return settings.highlight && Syntax.supports(effectiveLang()) && ed.value.length < 300000;
+  }
+
+  function setGutter(digits) {
+    if (digits === gutterDigits) return;
+    gutterDigits = digits;
+    const px = digits ? Math.ceil(Math.max(2, digits) * settings.fontSize * 0.82 * 0.62) + 10 : 0;
+    editorWrap.style.setProperty('--gutter', px + 'px');
+  }
+
+  function updateLayerStyles() {
+    for (const layer of [searchLayer, codeLayer]) {
+      layer.classList.toggle('nowrap', !settings.wrap);
+      layer.classList.toggle('proportional', !settings.mono);
+      layer.style.width = ed.clientWidth + 'px';
+      layer.style.tabSize = ed.style.tabSize;
+    }
+  }
+
+  function renderCode() {
+    const on = codeModeOn();
+    ed.classList.toggle('code-mode', on);
+    codeLayer.hidden = !on;
+    if (!on) {
+      codeLayer.innerHTML = '';
+      setGutter(0);
+      return;
+    }
+    const v = ed.value;
+    codeLayer.classList.toggle('numbered', settings.lineNumbers);
+    if (settings.lineNumbers) {
+      let lines = 1;
+      for (let i = v.indexOf('\n'); i >= 0; i = v.indexOf('\n', i + 1)) lines++;
+      setGutter(String(lines).length);
+    } else {
+      setGutter(0);
+    }
+    codeLayer.innerHTML = Syntax.renderLines(v, effectiveLang());
+    updateLayerStyles();
+    syncLayerScroll();
+  }
+
+  function syncLayerScroll() {
+    for (const layer of [searchLayer, codeLayer]) {
+      layer.scrollTop = ed.scrollTop;
+      layer.scrollLeft = ed.scrollLeft;
+    }
+  }
+
+  function refreshLayers() {
+    gutterDigits = -1;
+    renderCode();
+    updateLayerStyles();
+    if (search.open) renderHighlights();
   }
 
   // ===================================================================
@@ -819,10 +888,18 @@
     const total = ed.value.split('\n').length;
     const input = prompt(`移動する行番号（1〜${total}）`);
     if (input == null) return;
-    const n = Math.max(1, Math.min(total, parseInt(input, 10) || 1));
+    gotoLineNumber(parseInt(input, 10) || 1);
+  }
+
+  function gotoLineNumber(n) {
+    const total = ed.value.split('\n').length;
+    n = Math.max(1, Math.min(total, n));
     let pos = 0;
     for (let i = 1; i < n; i++) pos = ed.value.indexOf('\n', pos) + 1;
-    moveCaret(pos);
+    const end = lineBounds(pos).end;
+    ed.focus({ preventScroll: true });
+    ed.setSelectionRange(pos, end);
+    revealCaret(pos);
   }
 
   function openFromDevice() {
@@ -849,6 +926,8 @@
     $('#set-mono').checked = settings.mono;
     $('#set-autoindent').checked = settings.autoIndent;
     $('#set-pairs').checked = settings.pairs;
+    $('#set-highlight').checked = settings.highlight;
+    $('#set-linenumbers').checked = settings.lineNumbers;
     $('#settings').showModal();
   }
 
@@ -867,6 +946,8 @@
   bindSetting('#set-mono', 'mono', (el) => el.checked);
   bindSetting('#set-autoindent', 'autoIndent', (el) => el.checked);
   bindSetting('#set-pairs', 'pairs', (el) => el.checked);
+  bindSetting('#set-highlight', 'highlight', (el) => el.checked);
+  bindSetting('#set-linenumbers', 'lineNumbers', (el) => el.checked);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applySettings);
 
   let toastTimer = 0;
@@ -879,15 +960,388 @@
   }
 
   // ===================================================================
+  // 実行・テスト画面
+  // ===================================================================
+  const runUI = { open: false, running: false, stopRequested: false };
+  const results = new WeakMap(); // テストケース → 実行結果
+  const caseEls = new Map(); // テストケース → DOM
+  const OUTPUT_LIMIT = 1024 * 1024;
+  const DISPLAY_LIMIT = 100 * 1024;
+
+  const RUN_NOTES = {
+    python: 'Python はブラウザ内で実行します（Pyodide）。初回だけ約 10MB をダウンロードし、以降はオフラインでも動きます。numpy などは import すると自動で読み込みます。実行速度は PC の CPython より遅めです。',
+    cpp: 'C++ は Wandbox（wandbox.org）に送信してコンパイル・実行します（ネット接続が必要）。オプション: -O2 -std=gnu++20。AtCoder Library（ACL）は使えません。',
+    javascript: 'ブラウザ内で実行します。require("fs").readFileSync("/dev/stdin", "utf8") と、readline の "line" / "close" イベントに対応しています。',
+    text: 'このファイルは実行できません。上で言語を選ぶか、ファイル名の拡張子を .py / .cpp / .js にしてください。',
+  };
+
+  function ensureTests() {
+    if (!Array.isArray(current.tests)) current.tests = [{ input: '', expected: '' }];
+    return current.tests;
+  }
+
+  function setRunStatus(msg) {
+    const el = $('#run-status');
+    el.textContent = msg || '';
+    el.hidden = !msg;
+  }
+
+  function openRunView(autoRun) {
+    if (!current) return;
+    runUI.open = true;
+    document.body.classList.add('run-mode');
+    if (search.open) closeSearch(false);
+    ed.blur();
+    flushSave();
+    $('#editor-wrap').hidden = true;
+    $('#bottom').hidden = true;
+    $('#runview').hidden = false;
+    renderRunView();
+    if (autoRun && effectiveLang() in Runner.LANGS) runCases(ensureTests());
+    else Runner.warmup(effectiveLang(), setRunStatus);
+  }
+
+  function closeRunView() {
+    runUI.open = false;
+    document.body.classList.remove('run-mode');
+    $('#runview').hidden = true;
+    $('#editor-wrap').hidden = false;
+    $('#bottom').hidden = false;
+    refreshLayers();
+  }
+
+  function renderRunView() {
+    const sel = $('#run-lang');
+    sel.innerHTML = Object.entries(Runner.LANGS)
+      .map(([id, d]) => `<option value="${id}">${escapeHtml(d.label)}</option>`).join('') +
+      '<option value="text">実行しない（テキスト）</option>';
+    sel.value = effectiveLang();
+    const box = $('#cases');
+    box.innerHTML = '';
+    caseEls.clear();
+    ensureTests().forEach((t, i) => box.appendChild(buildCase(t, i)));
+    $('#run-note').textContent = RUN_NOTES[effectiveLang()] || '';
+    setRunning(runUI.running);
+    updateSummary();
+  }
+
+  function autoGrow(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight + 2, window.innerHeight * 0.45) + 'px';
+  }
+
+  function buildCase(test, i) {
+    const el = document.createElement('div');
+    el.className = 'case';
+    const taAttrs = 'spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" rows="1"';
+    el.innerHTML = `
+      <div class="case-head">
+        <span class="case-title">ケース ${i + 1}</span>
+        <span class="badge"></span>
+        <span class="case-time"></span>
+        <span class="spacer"></span>
+        <button class="mini-btn run-one" data-act="run">▶ 実行</button>
+        <button class="mini-btn" data-act="del">削除</button>
+      </div>
+      <div class="field-label"><span>入力</span><button class="mini-btn" data-act="paste-input">貼り付け</button></div>
+      <textarea class="case-input" ${taAttrs} aria-label="入力"></textarea>
+      <div class="field-label"><span>期待する出力（空欄なら判定なし）</span><button class="mini-btn" data-act="paste-expected">貼り付け</button></div>
+      <textarea class="case-expected" ${taAttrs} aria-label="期待する出力"></textarea>
+      <div class="field-label out-label" hidden><span>出力</span><button class="mini-btn" data-act="copy-out">コピー</button></div>
+      <pre class="stdout"></pre>
+      <pre class="stderr"></pre>`;
+    const input = el.querySelector('.case-input');
+    const expected = el.querySelector('.case-expected');
+    input.value = test.input || '';
+    expected.value = test.expected || '';
+    requestAnimationFrame(() => { autoGrow(input); autoGrow(expected); });
+
+    input.addEventListener('input', () => { test.input = input.value; autoGrow(input); scheduleSave(); });
+    expected.addEventListener('input', () => {
+      test.expected = expected.value;
+      autoGrow(expected);
+      scheduleSave();
+      const r = results.get(test);
+      if (r && ['AC', 'WA', '完了'].includes(r.verdict)) {
+        r.verdict = Runner.judge(r.stdout, test.expected) || '完了';
+        refreshCase(test);
+        updateSummary();
+      }
+    });
+
+    el.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'run') runCases([test]);
+      else if (act === 'del') deleteCase(test);
+      else if (act === 'copy-out') {
+        const r = results.get(test);
+        try { await navigator.clipboard.writeText(r ? r.stdout : ''); toast('出力をコピーしました'); } catch { toast('コピーできませんでした'); }
+      } else if (act.startsWith('paste-')) {
+        const ta = act === 'paste-input' ? input : expected;
+        try {
+          const text = await navigator.clipboard.readText();
+          ta.value = text;
+          ta.dispatchEvent(new Event('input'));
+        } catch {
+          ta.focus();
+          toast('長押しで貼り付けてください');
+        }
+      }
+    });
+
+    caseEls.set(test, el);
+    refreshCase(test);
+    return el;
+  }
+
+  function deleteCase(test) {
+    const tests = ensureTests();
+    if ((test.input || test.expected) && !confirm('このテストケースを削除しますか？')) return;
+    tests.splice(tests.indexOf(test), 1);
+    scheduleSave();
+    renderRunView();
+  }
+
+  function linkifyErrors(text) {
+    let html = escapeHtml(text);
+    const link = (shown, line) => `<a href="#" data-line="${line}">${shown}</a>`;
+    html = html.replace(/(File &quot;main\.py&quot;, line )(\d+)/g, (_, pre, n) => pre + link(n, n));
+    html = html.replace(/(prog\.cc:)(\d+)/g, (_, pre, n) => pre + link(n, n));
+    // new Function で包むため JavaScript の行番号は 2 行ずれる
+    html = html.replace(/(&lt;anonymous&gt;:)(\d+)/g, (_, pre, n) => {
+      const line = Math.max(1, Number(n) - 2);
+      return `main.js:${link(line, line)}`;
+    });
+    return html;
+  }
+
+  function refreshCase(test) {
+    const el = caseEls.get(test);
+    if (!el) return;
+    const r = results.get(test);
+    const badge = el.querySelector('.badge');
+    badge.textContent = r ? r.verdict : '';
+    badge.className = 'badge ' + (r ? r.verdict : '');
+    let time = '';
+    if (r && r.verdict === 'RUN' && r.start) time = `${((performance.now() - r.start) / 1000).toFixed(1)} 秒…`;
+    else if (r && r.time != null) time = r.time < 1000 ? `${Math.round(r.time)} ms` : `${(r.time / 1000).toFixed(2)} 秒`;
+    if (time && r.remote) time += '（通信込み）';
+    el.querySelector('.case-time').textContent = time;
+    el.querySelector('.out-label').hidden = !r;
+    const out = r ? r.stdout : '';
+    el.querySelector('.stdout').textContent = out.length > DISPLAY_LIMIT
+      ? out.slice(0, DISPLAY_LIMIT) + `\n…（以下 ${out.length - DISPLAY_LIMIT} 文字省略）`
+      : out;
+    const err = el.querySelector('.stderr');
+    err.innerHTML = r && r.stderr ? linkifyErrors(r.stderr.slice(0, DISPLAY_LIMIT)) : '';
+  }
+
+  let refreshQueued = new Set();
+  let refreshRaf = 0;
+  function queueRefresh(test) {
+    refreshQueued.add(test);
+    if (refreshRaf) return;
+    refreshRaf = requestAnimationFrame(() => {
+      refreshRaf = 0;
+      const list = refreshQueued;
+      refreshQueued = new Set();
+      list.forEach(refreshCase);
+    });
+  }
+
+  function updateSummary() {
+    const el = $('#run-summary');
+    if (!current) { el.textContent = ''; return; }
+    const judged = ensureTests().map((t) => results.get(t)).filter((r) => r && ['AC', 'WA', 'RE', 'CE'].includes(r.verdict));
+    if (!judged.length) { el.textContent = ''; return; }
+    const ac = judged.filter((r) => r.verdict === 'AC').length;
+    el.textContent = ac === judged.length ? `✅ ${ac} / ${judged.length} 件 AC` : `⚠️ ${ac} / ${judged.length} 件 AC`;
+    el.style.color = ac === judged.length ? 'var(--ok)' : 'var(--warn)';
+  }
+
+  function setRunning(on) {
+    $('#run-all').hidden = on;
+    $('#run-stop').hidden = !on;
+    $('#run-lang').disabled = on;
+    document.querySelectorAll('.run-one').forEach((b) => { b.disabled = on; });
+  }
+
+  function appendCapped(prev, data) {
+    if (prev.length >= OUTPUT_LIMIT) return prev;
+    const next = prev + data;
+    return next.length > OUTPUT_LIMIT ? next.slice(0, OUTPUT_LIMIT) + '\n…（出力が大きすぎるため打ち切りました）\n' : next;
+  }
+
+  async function runCases(list) {
+    if (runUI.running || !list.length) return;
+    const lang = effectiveLang();
+    if (!(lang in Runner.LANGS)) { toast('実行する言語を選んでください'); return; }
+    flushSave();
+    const code = ed.value;
+    runUI.running = true;
+    runUI.stopRequested = false;
+    setRunning(true);
+    for (const test of list) results.delete(test);
+    list.forEach(refreshCase);
+    updateSummary();
+
+    for (const test of list) {
+      if (runUI.stopRequested) break;
+      const r = { verdict: 'RUN', stdout: '', stderr: '', time: null, start: performance.now() };
+      results.set(test, r);
+      refreshCase(test);
+      const tick = setInterval(() => queueRefresh(test), 200);
+      const res = await Runner.run(lang, code, test.input || '', {
+        onOutput: (stream, data) => { r[stream] = appendCapped(r[stream], data); queueRefresh(test); },
+        onStatus: (msg) => { setRunStatus(msg); if (!msg) r.start = performance.now(); },
+      });
+      clearInterval(tick);
+      r.time = res.time ?? null;
+      r.remote = !!res.remote;
+      let stopAll = false;
+      if (res.status === 'stopped') { r.verdict = '停止'; stopAll = true; }
+      else if (res.status === 'error') { r.verdict = 'エラー'; r.stderr += res.message; stopAll = true; }
+      else if (res.status === 'compile-error') { r.verdict = 'CE'; stopAll = true; }
+      else if (res.exitCode !== 0) r.verdict = 'RE';
+      else r.verdict = Runner.judge(r.stdout, test.expected) || '完了';
+      refreshCase(test);
+      updateSummary();
+      if (stopAll) break;
+    }
+    runUI.running = false;
+    setRunning(false);
+    setRunStatus('');
+    updateSummary();
+  }
+
+  $('#run-all').addEventListener('click', () => runCases(ensureTests()));
+  $('#run-stop').addEventListener('click', () => { runUI.stopRequested = true; Runner.stop(); });
+  $('#add-case').addEventListener('click', () => {
+    ensureTests().push({ input: '', expected: '' });
+    scheduleSave();
+    renderRunView();
+    const last = $('#cases').lastElementChild;
+    if (last) {
+      last.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      last.querySelector('.case-input').focus({ preventScroll: true });
+    }
+  });
+  $('#run-lang').addEventListener('change', (e) => {
+    const lang = e.target.value;
+    if (lang === Runner.langFromName(current.name)) delete current.lang;
+    else current.lang = lang;
+    scheduleSave();
+    $('#run-note').textContent = RUN_NOTES[lang] || '';
+    Runner.warmup(lang, setRunStatus);
+  });
+  $('#copy-code').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(ed.value); toast('コードをコピーしました。提出画面に貼り付けてください'); } catch { toast('コピーできませんでした'); }
+  });
+  $('#cases').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-line]');
+    if (!a) return;
+    e.preventDefault();
+    closeRunView();
+    gotoLineNumber(Number(a.dataset.line));
+  });
+
+  // ===================================================================
+  // テンプレート
+  // ===================================================================
+  const SAMPLE_TEST = () => [{ input: '3\n1 2 3\n', expected: '6\n' }];
+  const TEMPLATES = {
+    'atcoder-py': {
+      name: 'main.py',
+      tests: SAMPLE_TEST,
+      code: `import sys
+
+input = sys.stdin.readline
+
+
+def main():
+    N = int(input())
+    A = list(map(int, input().split()))
+    print(sum(A))
+
+
+main()
+`,
+    },
+    'atcoder-cpp': {
+      name: 'main.cpp',
+      tests: SAMPLE_TEST,
+      code: `#include <bits/stdc++.h>
+using namespace std;
+using ll = long long;
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    int N;
+    cin >> N;
+    vector<ll> A(N);
+    for (auto &a : A) cin >> a;
+    cout << accumulate(A.begin(), A.end(), 0LL) << '\\n';
+}
+`,
+    },
+    'euler-py': {
+      name: 'euler_001.py',
+      tests: () => [{ input: '', expected: '' }],
+      code: `# Project Euler
+# https://projecteuler.net/problem=1
+
+
+def solve():
+    return sum(n for n in range(1000) if n % 3 == 0 or n % 5 == 0)
+
+
+print(solve())
+`,
+    },
+    js: {
+      name: 'main.js',
+      tests: SAMPLE_TEST,
+      code: `const input = require('fs').readFileSync('/dev/stdin', 'utf8');
+const lines = input.trim().split('\\n');
+
+const N = Number(lines[0]);
+const A = lines[1].split(' ').map(Number);
+console.log(A.reduce((s, a) => s + a, 0));
+`,
+    },
+    text: { name: 'memo.txt', code: '' },
+  };
+
+  function openNewFileDialog() {
+    const d = $('#newfile');
+    d.returnValue = '';
+    d.showModal();
+  }
+
+  $('#newfile').addEventListener('close', async () => {
+    const t = TEMPLATES[$('#newfile').returnValue];
+    if (!t) return;
+    const name = prompt('ファイル名', t.name);
+    if (name == null) return;
+    await createFile(name.trim() || t.name, t.code, t.tests ? t.tests() : undefined);
+    if (runUI.open) closeRunView();
+    ed.focus({ preventScroll: true });
+  });
+
+  // ===================================================================
   // イベント登録
   // ===================================================================
   $('#btn-files').addEventListener('click', openDrawer);
   $('#drawer-overlay').addEventListener('click', closeDrawer);
-  $('#btn-new').addEventListener('click', async () => { closeDrawer(); await createFile(); ed.focus(); });
+  $('#btn-new').addEventListener('click', () => { closeDrawer(); openNewFileDialog(); });
   $('#btn-rename').addEventListener('click', renameCurrent);
   $('#btn-menu').addEventListener('click', openMenu);
   $('#menu-overlay').addEventListener('click', closeMenu);
   $('#btn-search').addEventListener('click', () => (search.open ? closeSearch() : openSearch()));
+  $('#btn-run').addEventListener('click', () => (runUI.open ? closeRunView() : openRunView(true)));
   $('#btn-undo').addEventListener('click', () => execHistory('undo'));
   $('#btn-redo').addEventListener('click', () => execHistory('redo'));
   ['#btn-undo', '#btn-redo', '#find-prev', '#find-next', '#replace-one', '#replace-all'].forEach((s) => keepFocus($(s)));
@@ -900,7 +1354,7 @@
     if (!action) return;
     closeMenu();
     ({
-      new: async () => { await createFile(); ed.focus(); },
+      new: openNewFileDialog,
       open: openFromDevice,
       download,
       share,
@@ -952,13 +1406,14 @@
     root.style.setProperty('--app-height', vv.height + 'px');
     root.style.setProperty('--app-top', vv.offsetTop + 'px');
     document.body.classList.toggle('keyboard-open', fullHeight - vv.height > 120);
-    if (search.open) renderHighlights();
+    updateLayerStyles();
   }
   if (vv) {
     vv.addEventListener('resize', onViewport);
     vv.addEventListener('scroll', onViewport);
     onViewport();
   }
+  window.addEventListener('resize', updateLayerStyles);
   // iOS でフォーカス時にページ自体がスクロールしてしまうのを戻す
   window.addEventListener('scroll', () => { if (window.scrollY) window.scrollTo(0, 0); });
 
@@ -982,6 +1437,14 @@
 ・← ↑ ↓ → … カーソル移動（長押しで連続移動）
 ・記号キー … 括弧や引用符は自動で閉じます
 ・行選択／行複製／行削除
+
+■ コードの実行（AtCoder / Project Euler 向け）
+・︙ →「新規ファイル」でテンプレートを選択
+・上の ▶ で実行画面へ。テストケース（入力と期待する出力）を
+  まとめて実行し、AC / WA / RE を判定します
+・Python と JavaScript は端末内で実行（オフライン可）
+・C++ はオンラインコンパイラ（Wandbox）で実行
+・エラーメッセージの行番号をタップするとその行へ移動
 
 ■ ホーム画面に追加
 ブラウザの「共有」→「ホーム画面に追加」で
