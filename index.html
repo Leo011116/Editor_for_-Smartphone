@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#1e1f24">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Editor">
+  <title>Pocket Editor</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 上部バー -->
+    <header class="topbar">
+      <button class="icon-btn" id="btn-files" aria-label="ファイル一覧" title="ファイル一覧">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="filename" id="btn-rename" aria-label="ファイル名を変更">
+        <span id="filename">untitled.txt</span>
+        <span class="dirty" id="save-state" aria-hidden="true"></span>
+      </button>
+      <button class="icon-btn" id="btn-undo" aria-label="元に戻す" title="元に戻す">
+        <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-redo" aria-label="やり直す" title="やり直す">
+        <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-search" aria-label="検索と置換" title="検索と置換">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-menu" aria-label="メニュー" title="メニュー">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg>
+      </button>
+    </header>
+
+    <!-- 検索・置換 -->
+    <section class="searchbar" id="searchbar" hidden>
+      <div class="search-row">
+        <input id="find-input" type="search" placeholder="検索" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+        <span class="match-count" id="match-count"></span>
+        <button class="icon-btn small" id="find-prev" aria-label="前へ">
+          <svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg>
+        </button>
+        <button class="icon-btn small" id="find-next" aria-label="次へ">
+          <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="icon-btn small" id="search-close" aria-label="閉じる">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="search-row">
+        <input id="replace-input" type="text" placeholder="置換" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="text-btn" id="replace-one">置換</button>
+        <button class="text-btn" id="replace-all">すべて</button>
+      </div>
+      <div class="search-row options">
+        <label><input type="checkbox" id="opt-case"> 大/小文字を区別</label>
+        <label><input type="checkbox" id="opt-regex"> 正規表現</label>
+      </div>
+    </section>
+
+    <!-- エディタ本体 -->
+    <main class="editor-wrap">
+      <textarea id="editor"
+        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+        aria-label="テキストエディタ" placeholder="ここに入力…"></textarea>
+    </main>
+
+    <!-- 補助キーバー -->
+    <footer class="bottom">
+      <div class="keybar" id="keybar" role="toolbar" aria-label="補助キー"></div>
+      <div class="statusbar">
+        <span id="status-pos">1:1</span>
+        <span id="status-info"></span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ファイル一覧ドロワー -->
+  <div class="overlay" id="drawer-overlay" hidden></div>
+  <aside class="drawer" id="drawer" aria-label="ファイル一覧" hidden>
+    <div class="drawer-head">
+      <h2>ファイル</h2>
+      <button class="text-btn primary" id="btn-new">＋ 新規</button>
+    </div>
+    <ul class="file-list" id="file-list"></ul>
+  </aside>
+
+  <!-- メニュー -->
+  <div class="overlay transparent" id="menu-overlay" hidden></div>
+  <div class="menu" id="menu" role="menu" hidden>
+    <button role="menuitem" data-action="new">新規ファイル</button>
+    <button role="menuitem" data-action="open">端末から開く…</button>
+    <button role="menuitem" data-action="download">ダウンロード保存</button>
+    <button role="menuitem" data-action="share" id="menu-share">共有…</button>
+    <button role="menuitem" data-action="copy">全文コピー</button>
+    <hr>
+    <button role="menuitem" data-action="goto">行へ移動…</button>
+    <button role="menuitem" data-action="settings">設定</button>
+    <hr>
+    <button role="menuitem" data-action="delete" class="danger">このファイルを削除</button>
+  </div>
+
+  <!-- 設定ダイアログ -->
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>設定</h2>
+      <label class="field">
+        <span>文字サイズ <output id="font-size-out">15</output>px</span>
+        <input type="range" id="set-font-size" min="10" max="28" step="1">
+      </label>
+      <label class="field">
+        <span>テーマ</span>
+        <select id="set-theme">
+          <option value="auto">端末に合わせる</option>
+          <option value="light">ライト</option>
+          <option value="dark">ダーク</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>インデント</span>
+        <select id="set-indent">
+          <option value="2">スペース 2</option>
+          <option value="4">スペース 4</option>
+          <option value="tab">タブ</option>
+        </select>
+      </label>
+      <label class="field check"><input type="checkbox" id="set-wrap"> 折り返し表示</label>
+      <label class="field check"><input type="checkbox" id="set-mono"> 等幅フォント</label>
+      <label class="field check"><input type="checkbox" id="set-autoindent"> 改行時に自動インデント</label>
+      <label class="field check"><input type="checkbox" id="set-pairs"> 補助キーで括弧を自動で閉じる</label>
+      <div class="dialog-actions">
+        <button class="text-btn primary" value="close">閉じる</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="file-input" hidden>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
